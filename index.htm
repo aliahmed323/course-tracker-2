@@ -147,7 +147,7 @@
   <div class="header-container">
     <div style="display: flex; align-items: center; gap: 16px;">
         <h1 id="headerTitle">متابعة كورسات</h1>
-        <span class="welcome-message">مرحباً</span>
+        <span class="welcome-message">بسم الله</span>
     </div>
     <div id="clockDateContainer">
         <span id="liveDate"></span>
@@ -252,23 +252,395 @@ let mainAppContent, userSection, userImg, userName, loginBtn, logoutBtn, cardsEl
     searchInput, starredModal;
 
 // --- Default Data (No Change) ---
-function getDefaultData() { /* ... */ } // Same as before
+function getDefaultData() {
+    return {
+        "المادة الافتراضية": {
+            totalHours: 100,
+            chapters: {
+                "Chapter 1": 40.5,
+                "Chapter 2": 59.5
+            },
+            chapterHours: {
+                "Chapter 1": 10,
+                "Chapter 2": 15
+            },
+            doctors: {
+                "د. علي": [
+                    { title: "Lec 1: Intro", video: "url", chapter: "Chapter 1", weight: 20.0 },
+                    { title: "Lec 2: Advanced", video: "url", chapter: "Chapter 1", weight: 20.5 }
+                ],
+                "د. محمد": [
+                    { title: "Lec 3: Basics", video: "url", chapter: "Chapter 2", weight: 59.5 }
+                ]
+            }
+        }
+    };
+}
 
 // --- Firestore Functions (No Change) ---
-async function loadDataFromFirestore() { /* ... */ } // Same as before
-async function saveAllDataToFirestore() { /* ... */ } // Same as before
-async function saveAppData() { /* ... */ } // Same as before
+async function loadDataFromFirestore() { if (!userDocRef) return; console.log("Ld F:", userId); try { const dS = await userDocRef.get(); if (dS.exists) { const d = dS.data(); appData = d.appData || getDefaultData(); state = d.state || {}; const sK = Object.keys(appData); activeSubjectName = (d.activeSubjectName && appData[d.activeSubjectName]) ? d.activeSubjectName : (sK.length > 0 ? sK[0] : null); examDate = d.examDate || ""; totalStudyDays = d.totalStudyDays || 0; console.log("Ld ok."); } else { console.log("No data, default..."); appData = getDefaultData(); state = {}; activeSubjectName = Object.keys(appData)[0]; examDate = ""; totalStudyDays = 0; await saveAllDataToFirestore(); console.log("Default saved."); } } catch (e) { console.error("Err Ld:", e); appData = getDefaultData(); state = {}; activeSubjectName = Object.keys(appData)[0]; } }
+async function saveAllDataToFirestore() { if (!userDocRef) return; console.log("Sv All..."); try { await userDocRef.set({ appData, state, activeSubjectName, examDate, totalStudyDays }, { merge: true }); console.log("All svd."); } catch (e) { console.error("Err sv all:", e); } }
+async function saveAppData() { if (!userDocRef) return; try { await userDocRef.update({ appData }); console.log("AppD svd."); } catch (e) { console.error("Err sv AppD:", e); } }
 async function saveProgress() { if (!userDocRef) return; try { await userDocRef.update({ state }); console.log("%cProg svd.", "color: lightblue;", JSON.parse(JSON.stringify(state))); } catch (e) { console.error("Err sv Prog:", e); } }
-async function saveActiveSubject() { /* ... */ } // Same as before
-async function saveExamDateAndDays(newD, newTD) { /* ... */ } // Same as before
+async function saveActiveSubject() { if (!userDocRef) return; try { await userDocRef.update({ activeSubjectName }); console.log("ActSubj svd."); } catch (e) { console.error("Err sv ActSubj:", e); } }
+async function saveExamDateAndDays(newD, newTD) { if (!userDocRef) return; examDate = newD; totalStudyDays = newTD; try { await userDocRef.update({ examDate, totalStudyDays }); console.log("ExDate svd."); } catch (e) { console.error("Err sv ExDate:", e); } }
 
 // --- Calculation Functions (No Change) ---
 function isLectureComplete(rec){ return !!rec?.notes; }
-function computeGlobal(subName, subData){ /* ... */ } // Same as before
+function computeGlobal(subName, subData){
+    let t = { l: 0, w: 0, dl: 0, dw: 0, sl: 0, sw: 0, v: 0, n: 0, dh: 0 };
+    if(!subData || !subData.doctors) return {...t, al:0, aw:0, rl:0, rw:0, p:0, bp:0, vp:0, np:0, doneHours:0};
+
+    Object.entries(subData.doctors).forEach(([dr, ls]) => {
+        if (!Array.isArray(ls)) return;
+        ls.forEach(l => {
+            if (!l || typeof l !== 'object') return;
+            const k = `${subName}||${l.chapter}||${l.title}`;
+            const r = state[k] || { snoozed: !1 };
+
+            t.l++;
+            t.w += (l.weight || 0);
+
+            if(r.video) t.v++;
+            if(r.notes) t.n++;
+
+            if(r.snoozed){
+                t.sl++;
+                t.sw += (l.weight || 0);
+            } else {
+                if(isLectureComplete(r)){ // Check if notes are done
+                    t.dl++;
+                    t.dw += (l.weight || 0);
+                    // Add hours ONLY if lecture is complete AND video is checked AND duration exists
+                    if(r.video && r.videoDuration) {
+                        t.dh += r.videoDuration;
+                    }
+                }
+            }
+        });
+    });
+
+    const al = t.l - t.sl;
+    const aw = t.w - t.sw;
+    const p = al > 0 ? (t.dl / al) * 100 : 0;
+    const bp = aw > 0 ? (t.dw / aw) * 100 : 0;
+
+    console.log(`%ccomputeGlobal Result: doneHours=${t.dh}`, "color: yellow;");
+    return {
+        ...t,
+        activeLectures: al,
+        activeWeight: parseFloat(aw.toFixed(2)),
+        remainingLectures: al - t.dl,
+        remainingWeight: parseFloat((aw - t.dw).toFixed(2)),
+        pct: Math.round(p),
+        blueprintPct: Math.round(bp),
+        videoPct: al > 0 ? Math.round(t.v / al * 100) : 0,
+        notesPct: al > 0 ? Math.round(t.n / al * 100) : 0,
+        snoozedLectures: t.sl,
+        doneHours: t.dh
+    };
+}
 
 
 // --- Rendering Functions (No Change) ---
-function renderGlobalHeader(subName, subData, computedGlobal){ /* ... */ } // Same as before
+function renderGlobalHeader(subName, subData, computedGlobal){
+    const g = computedGlobal || computeGlobal(subName, subData);
+    console.log(`%crenderGlobalHeader: Using doneHours=${g.doneHours}`, "color: lightgreen;");
+    if(subName){headerTitle.textContent=`متابعة: ${subName}`}else{headerTitle.textContent="متابعة كورسات"}
+    globalBar.style.width=g.pct+'%';globalBarPct.textContent=g.pct+'%';
+    blueprintBarSpan.style.width=g.blueprintPct+'%';blueprintBarPct.textContent=g.blueprintPct+'%';
+    totalHoursEl.textContent=subData?.totalHours?`${subData.totalHours}`:"-";
+    try{document.getElementById('globalKpis').innerHTML=`<span class=kpi>الكمية:${g.pct}%</span><span class="kpi status-warn" style="color:var(--warn)">البلوبرنت:${g.blueprintPct}%</span><span class=kpi>الباقي:${g.remainingLectures}/${g.activeLectures}</span><span class=kpi>المتجاهل:${g.snoozedLectures}</span>`}catch(e){/*ignore*/}
+}
+function render(subName, subData, searchTerm = "") {
+    console.log(`%cRendering list...`, "color: orange;");
+    const globalStats = computeGlobal(subName, subData);
+    renderGlobalHeader(subName, subData, globalStats);
+
+    // FIX: Restore logic is now inside updateEntry calling init()
+    cardsEl.innerHTML = "";
+
+    if (!subData || !subData.doctors || Object.keys(subData.doctors).length === 0) {
+        cardsEl.innerHTML = `<p style="text-align:center;">لا توجد بيانات لهذه المادة.</p>`;
+        return;
+    }
+    const chapters = {};
+    const chW = subData.chapters || {};
+    Object.entries(subData.doctors).forEach(([dr, ls]) => {
+        if (Array.isArray(ls)) {
+            ls.forEach(l => {
+                if (!l || typeof l !== 'object') { return; }
+                const cn = l.chapter || "غير مصنف";
+                if (!chapters[cn]) {
+                    chapters[cn] = {
+                        lectures: [],
+                        totalWeight: chW[cn] || 0,
+                        lectureCount: 0,
+                        lecturesRemaining: 0,
+                        hoursDone: 0
+                    };
+                }
+                chapters[cn].lectures.push({ ...l, doctor: dr });
+                const k = `${subName}||${cn}||${l.title}`;
+                const rec = state[k] || { snoozed: !1 };
+                if (!rec.snoozed) {
+                    chapters[cn].lectureCount++;
+                    if (!isLectureComplete(rec)) {
+                        chapters[cn].lecturesRemaining++;
+                    }
+                    if (isLectureComplete(rec) && rec.video && rec.videoDuration) {
+                        chapters[cn].hoursDone += rec.videoDuration;
+                    }
+                }
+            });
+        }
+    });
+    let chA = Object.entries(chapters).map(([n, d]) => ({
+        name: n,
+        totalWeight: parseFloat(d.totalWeight.toFixed(2)),
+        lectures: d.lectures,
+        stats: {
+            count: d.lectureCount,
+            remaining: d.lecturesRemaining,
+            hoursDone: d.hoursDone
+        }
+    }));
+    if (isSorted) { chA.sort((a, b) => b.totalWeight - a.totalWeight); }
+    let firstMatchElement = null;
+    chA.forEach((ch, idx) => {
+        let chapterCompletedWeight = 0;
+        let chapterActiveWeight = 0;
+        let hasVisibleLectures = false;
+        const lecturesHTML = ch.lectures.map(l => {
+            const k = `${subName}||${l.chapter}||${l.title}`;
+            const rec = state[k] || { snoozed: !1, starred: !1 };
+            const isMatch = searchTerm && l.title?.toLowerCase().includes(searchTerm.toLowerCase());
+            if (searchTerm && !isMatch) return '';
+            hasVisibleLectures = true;
+            let rcs = "row";
+            if (isLectureComplete(rec)) rcs += " done";
+            else if (rec.video || rec.notes) rcs += " partial";
+            if (rec.snoozed) rcs += " snoozed";
+            if (isMatch) rcs += " highlight";
+            if (isMatch && !firstMatchElement) { firstMatchElement = { key: k }; }
+            if (!rec.snoozed) {
+                chapterActiveWeight += (l.weight || 0);
+                if (isLectureComplete(rec)) {
+                    chapterCompletedWeight += (l.weight || 0);
+                }
+            }
+            const starIcon = rec.starred ? '⭐' : '☆';
+            return `<div class="${rcs}" data-key="${k}">
+                      <button class="star-btn ${rec.starred?'active':''}" data-action="star" title="تمييز">${starIcon}</button>
+                      <span class=lecture-weight>${l.weight || 0}%</span>
+                      <div class=title>${l.title}</div>
+                      <button class=snooze-btn data-action=snooze title=تجاهل>🚫</button>
+                      <label class=chip><input type=checkbox data-action=video ${rec.video?'checked':''}> فيديو</label>
+                      <label class=chip><input type=checkbox data-action=notes ${rec.notes?'checked':''}> ملزمة</label>
+                    </div>`;
+        }).join('');
+        if (hasVisibleLectures) {
+            const chapterBlueprintPct = chapterActiveWeight > 0 ? Math.round((chapterCompletedWeight / chapterActiveWeight) * 100) : 0;
+            const chapterHoursTotal = subData.chapterHours?.[ch.name] || 0;
+            const chapterHoursRemaining = Math.max(0, chapterHoursTotal - ch.stats.hoursDone);
+            const card = document.createElement('section');
+            card.className = "card";
+            const cId = `c-${idx}`;
+            card.innerHTML = `
+              <div class=card-header data-collapse="${cId}">
+                <h2>${ch.name}</h2>
+                <div style="text-align: left; flex-shrink: 0; max-width: 250px;">
+                  <div style="display: flex; gap: 16px; align-items: center; justify-content: flex-end;">
+                    <span class=chapter-weight>${ch.totalWeight}%</span>
+                    <div class="chapter-progress-container"><div class="chapter-progress-bar" style="width: ${chapterBlueprintPct}%;"></div></div>
+                  </div>
+                  <div class="chapter-stats">
+                    <div class="stat-item">المحاضرات: <span>${ch.stats.count}</span></div>
+                    <div class="stat-item">المتبقي: <span>${ch.stats.remaining}</span></div>
+                    <div class="stat-item">الساعات: <span>${chapterHoursTotal.toFixed(1)}h</span></div>
+                    <div class="stat-item">متبقي: <span>${chapterHoursRemaining.toFixed(1)}h</span></div>
+                  </div>
+                </div>
+              </div>
+              <div id="${cId}" class=card-content>${lecturesHTML}</div>`;
+            cardsEl.appendChild(card);
+            const listEl = card.querySelector(`#${cId}`);
+            // FIX: Card restore logic is handled below the main loop in the init() function
+            listEl.style.display = 'none'; // Default to hidden
+            if(searchTerm) { listEl.style.display = 'grid'; } // Always open if searching
+
+            card.querySelector('[data-collapse]').addEventListener('click', (e) => {
+                if (e.target.closest('button,input,label')) return;
+                listEl.style.display = (listEl.style.display === 'none' || listEl.style.display === '') ? 'grid' : 'none'
+            });
+            listEl.querySelectorAll('.row button, .row input').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const rowEl = e.target.closest('.row');
+                    const title = rowEl.querySelector('.title').textContent;
+                    const lectureData = ch.lectures.find(l => l.title === title);
+                    if (lectureData) {
+                        updateEntry(subName, lectureData, rowEl, el.dataset.action);
+                    } else { console.error("Could not find lecture data for event target:", title); }
+                })
+            });
+        }
+    });
+    if (firstMatchElement) {
+        setTimeout(() => {
+            const elementToScroll = cardsEl.querySelector(`.row[data-key="${firstMatchElement.key}"]`);
+            if (elementToScroll) { elementToScroll.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+        }, 100);
+    } else if (searchTerm) {
+        cardsEl.innerHTML = `<p style="text-align:center;">لا توجد نتائج بحث.</p>`;
+    }
+}
+
+
+/*
+=============================================================================
+=== ✅ updateEntry Function (Simplified to guarantee calculation) ===
+=============================================================================
+*/
+async function updateEntry(subName, lec, rowEl, action){
+    const k = `${subName}||${lec.chapter}||${lec.title}`;
+    const rec = state[k] || {snoozed:!1, starred: !1, videoDuration: null};
+    let shouldSave = true;
+
+    // --- 1. Perform Action & Update State Object ---
+    if(action === 'video'){
+        const isChecking = rowEl.querySelector('[data-action=video]').checked;
+
+        if (isChecking && (rec.videoDuration === null || rec.videoDuration === undefined)) {
+            const durationInput = prompt(`كم ساعة استغرق فيديو "${lec.title}"؟`, "");
+            if (durationInput !== null) {
+                const duration = parseFloat(durationInput);
+                if (!isNaN(duration) && duration > 0) {
+                    rec.videoDuration = duration;
+                    rec.video = true;
+                } else {
+                    alert("أدخل رقم صحيح (مثل 1.5).");
+                    rowEl.querySelector('[data-action=video]').checked = false;
+                    shouldSave = false;
+                }
+            } else {
+                rowEl.querySelector('[data-action=video]').checked = false;
+                shouldSave = false;
+            }
+        } else {
+             rec.video = isChecking;
+        }
+    }
+    else if(action === 'notes'){
+        rec.notes = rowEl.querySelector('[data-action=notes]').checked;
+    }
+    else if(action === 'snooze'){
+        rec.snoozed = !rec.snoozed;
+    }
+    else if(action === 'star'){
+        rec.starred = !rec.starred;
+        const starBtn = rowEl.querySelector('.star-btn');
+        if(starBtn) {
+            starBtn.classList.toggle('active', rec.starred);
+            starBtn.textContent = rec.starred ? '⭐' : '☆';
+        }
+        // Save star state, but skip init() call later
+    }
+
+    // --- 2. Save Block & Re-initialize ---
+    if (shouldSave) {
+        state[k] = rec;
+        await saveProgress();
+
+        // Re-initialize UI and calculations ONLY if it affects the plan (not just starring)
+        if (action !== 'star') {
+            // Find currently open cards BEFORE calling init()
+            const openCardIds = [];
+            cardsEl.querySelectorAll('.card-content').forEach(contentEl => {
+                if (contentEl.style.display === 'grid') {
+                    openCardIds.push(contentEl.id);
+                }
+            });
+
+            // Call init to re-render all calculations and headers
+            init();
+
+            // Restore open cards after init finishes rendering
+             setTimeout(() => {
+                openCardIds.forEach(cardId => {
+                    const contentEl = document.getElementById(cardId);
+                    if (contentEl) {
+                        contentEl.style.display = 'grid';
+                    }
+                });
+             }, 0);
+        }
+    }
+    // Row color updates (done/partial/snoozed) are handled by render() inside init()
+}
+
+
+// --- Planning Functions (No Change) ---
+function getDaysRemaining(targetDate = examDate) { /* ... */ } // Same as before
+function calculateAndDisplayDays() { /* ... */ } // Same as before
+function updateDynamicPlan() { /* ... */ } // Same as before
+
+
+// --- Modal Functions (No Change) ---
+function openAddSubjectModal() { if (!currentUser) return; document.getElementById('newSubjectNameInput').value = ''; addSubjectModal.style.display = 'flex'; }
+function closeAddSubjectModal() { addSubjectModal.style.display = 'none'; }
+function handleSaveNewSubject() { if (!currentUser) return; const nameIn=document.getElementById('newSubjectNameInput');const name=nameIn.value.trim();if(name&&!appData[name]){appData[name]={totalHours:0,chapters:{},doctors:{}, chapterHours:{}}; saveAppData();activeSubjectName=name;saveActiveSubject();init();closeAddSubjectModal()}else if(!name){alert('أدخل اسم المادة.')}else{alert('المادة موجودة.')} }
+async function handleSaveChapterHours(e) { if (!currentUser || !activeSubjectName) return; const input = e.target; const chName = input.dataset.chapterName; const hours = parseFloat(input.value); if (chName && !isNaN(hours) && hours >= 0) { if (!appData[activeSubjectName].chapterHours) { appData[activeSubjectName].chapterHours = {}; } appData[activeSubjectName].chapterHours[chName] = hours; await saveAppData(); render(activeSubjectName, appData[activeSubjectName], searchInput ? searchInput.value : ""); } }
+function openManageModal() { if (!currentUser) return; const subName=activeSubjectName; if(!subName){alert("أضف مادة (+).");return} if (!appData[subName]) appData[subName] = {}; if (!appData[subName].doctors) appData[subName].doctors = {}; if (!appData[subName].chapterHours) appData[subName].chapterHours = {}; const subData=appData[subName]; const drs=Object.keys(subData.doctors); const mngCnt=document.getElementById('manageModalContent'); if(!mngCnt)return console.error("Mng modal content !found"); mngCnt.innerHTML=`<h3>إدارة (${subName})</h3><p>إضافة دكاترة، محاضرات، وإدارة ساعات الفصول.</p><div class=divider></div><h4>إضافة دكتور/قسم</h4><div class=form-group style="display:flex;gap:8px"><input type=text id=newDoctorName><button id=addDoctorBtn>إضافة</button></div><div class=divider></div><h4>إضافة محاضرات (دفعة)</h4><div class=form-group><label for=doctorSelect>اختر الدكتور</label><select id=doctorSelect>${drs.map(d=>`<option value="${d}">${d}</option>`).join('')}</select></div><div class=form-group><label>لصق المحاضرات (كل محاضرة في سطر)</label><textarea id=bulkLectures placeholder="Lec 1: Intro\nLec 2: Basics..."></textarea><button id=bulkAddBtn style="margin-top:8px">إضافة المحاضرات</button></div><div class="divider"></div><h4>إدارة ساعات الفصول</h4><p style="font-size:14px; color:var(--sub);">أدخل ساعات كل فصل. ستظهر هذه الساعات في رأس الجابتر.<br>(اضغط على صندوق "إجمالي الساعات" في الخارج لاقتراح المجموع أو لإدخال رقم يدوي).</p><div id="chapterHoursContainer" style="display:grid; gap:10px; margin-top:12px; max-height: 250px; overflow-y: auto; background: #0b1527; padding: 10px; border-radius: 8px;"></div><div class="divider"></div><h4>إجراءات خطيرة</h4><button class="danger" id="resetAllInModal">تفريغ بيانات التقدم</button><div style="text-align:left;margin-top:24px"><button class=secondary id=closeManageModal>إغلاق</button></div>`; const chapterHoursContainer = mngCnt.querySelector('#chapterHoursContainer'); const chapters = new Set(); Object.values(subData.doctors || {}).forEach(ls => { if(Array.isArray(ls)) { ls.forEach(l => chapters.add(l.chapter || "غير مصنف")); } }); if (chapters.size === 0) { chapterHoursContainer.innerHTML = '<p style="font-size:14px; color:var(--sub);">لا توجد فصول لإضافة ساعات لها بعد. (أضف محاضرات أولاً)</p>'; } else { chapters.forEach(chName => { const currentHours = subData.chapterHours?.[chName] || 0; const group = document.createElement('div'); group.className = 'form-group'; group.style.marginBottom = '8px'; group.style.display = 'flex'; group.style.alignItems = 'center'; group.style.gap = '10px'; group.innerHTML = `<label for="ch_hours_${chName}" style="flex-grow:1; margin-bottom:0; font-size: 15px;">${chName}</label><input type="number" id="ch_hours_${chName}" value="${currentHours}" data-chapter-name="${chName}" style="width: 80px; text-align:center; padding: 6px 8px;"><span style="font-size: 14px; color: var(--sub);">ساعة</span>`; chapterHoursContainer.appendChild(group); group.querySelector('input[type="number"]').addEventListener('change', handleSaveChapterHours); }); } mngCnt.querySelector('#addDoctorBtn').addEventListener('click',handleAddDoctor); mngCnt.querySelector('#bulkAddBtn').addEventListener('click',handleBulkAddLectures); mngCnt.querySelector('#closeManageModal').addEventListener('click',()=>manageModalBack.style.display='none'); mngCnt.querySelector('#resetAllInModal').addEventListener('click', resetAllData); manageModalBack.style.display='flex'; }
+function handleAddDoctor() { if(!currentUser)return; const subName=activeSubjectName;const inp=document.getElementById('newDoctorName');const name=inp.value.trim();if(name&&!appData[subName].doctors[name]){appData[subName].doctors[name]=[];saveAppData();init();openManageModal()}else{alert('الاسم موجود أو فارغ.')} }
+function handleBulkAddLectures() { if(!currentUser)return; const subName=activeSubjectName;const dr=document.getElementById('doctorSelect').value;const txt=document.getElementById('bulkLectures');const tx=txt.value.trim();if(!dr||!tx){alert('اختر دكتور والصق المحاضرات.');return} const newLs=tx.split('\n').map(l=>l.trim()).filter(l=>l).map(t=>({title:t,video:"",chapter:"غير مصنف",weight:0}));if(newLs.length>0){const exLs=appData[subName].doctors[dr] || []; appData[subName].doctors[dr]=exLs.concat(newLs);saveAppData();txt.value='';alert(`تمت إضافة ${newLs.length}.`);init();openManageModal()} }
+function setupRemainingModal() { if (!currentUser) return; const subName=activeSubjectName;if(!subName)return;const subData=appData[subName];const remCnt=document.getElementById('remainingContainer');if(!remCnt)return console.error("Rem container !found");remCnt.innerHTML="";let hasPend=!1;Object.entries(subData.doctors).forEach(([dr,ls])=>{const pend=ls.filter(t=>{const k=`${subName}||${t.chapter}||${t.title}`;const r=state[k]||{};return!isLectureComplete(r)&&!r.snoozed});if(pend.length===0)return;hasPend=!0;const blk=document.createElement('div');blk.className="card";blk.style.padding="16px";blk.style.marginBottom="12px";blk.innerHTML=`<h2 style="font-size:20px">${dr}</h2><div class=subinfo>متبقي:<b>${pend.length}</b></div>`;const list=document.createElement('div');list.style.display="grid";list.style.gap="10px";pend.forEach(l=>{const k=`${subName}||${l.chapter}||${l.title}`;const r=state[k]||{};const row=document.createElement('div');row.className="row";row.innerHTML=`<span class=lecture-weight>${l.weight}%</span><div class=title>${l.title}</div><div style="grid-column:span 3;font-size:14px;text-align:left">المطلوب: ${!r.video?'فيديو ❌':''} ${!r.notes?'ملزمة ❌':''}</div>`;list.appendChild(row)});blk.appendChild(list);remCnt.appendChild(blk)});if(!hasPend){remCnt.innerHTML=`<p style="text-align:center;font-size:20px">🎉<br>أكملت الكل.</p>`} remainingModalBack.style.display="flex"; }
+function setupStarredModal() { if (!currentUser) return; const subName = activeSubjectName; if (!subName || !appData[subName] || !appData[subName].doctors) return; const starredContainer = document.getElementById('starredContainer'); if (!starredContainer) return console.error("Starred container !found"); starredContainer.innerHTML = ""; let hasStarred = false; const chaptersStarred = {}; Object.entries(appData[subName].doctors).forEach(([doctor, lectures]) => { if (Array.isArray(lectures)) { lectures.forEach(lecture => { const key = `${subName}||${lecture.chapter}||${lecture.title}`; const rec = state[key] || {}; if (rec.starred && !rec.snoozed) { hasStarred = true; const chapterName = lecture.chapter || "غير مصنف"; if (!chaptersStarred[chapterName]) { chaptersStarred[chapterName] = []; } chaptersStarred[chapterName].push({ ...lecture, status: rec }); } }); } }); if (!hasStarred) { starredContainer.innerHTML = `<p style="text-align:center;">لم تقم بتمييز أي محاضرات ⭐.</p>`; } else { Object.entries(chaptersStarred).forEach(([chapterName, starredLectures]) => { const chapterCard = document.createElement('div'); chapterCard.className = 'card'; chapterCard.innerHTML = `<h2 style="padding: 16px 16px 0;">${chapterName}</h2><div class="card-content" style="display: grid; padding: 16px;"> ${starredLectures.map(l => { const isDone = isLectureComplete(l.status); return `<div class="row"><span class="lecture-weight">${l.weight}%</span><div class="title">${l.title}</div><span class="completion-status ${isDone ? 'done' : ''}">${isDone ? 'مكتمل ✅' : 'غير مكتمل ❌'}</span></div>`; }).join('')}</div>`; starredContainer.appendChild(chapterCard); }); } starredModal.style.display = "flex"; }
+
+// --- Auth Functions (No Change) ---
+async function signInWithGoogle() { console.log("Attempting Google Sign-In..."); try { await auth.signInWithPopup(googleProvider); console.log("Sign-in popup initiated."); } catch (e) { console.error("Sign-in error:", e); alert("خطأ الدخول: " + e.message); } }
+async function signOutUser() { console.log("Signing out..."); try { await auth.signOut(); } catch (e) { console.error("Sign-out error:", e); alert("خطأ الخروج: " + e.message); } }
+
+// --- Reset Function (No Change) ---
+async function resetAllData() { if (!currentUser || !userDocRef) return; if(confirm('متأكد؟ سيتم حذف كل بيانات التقدم (الصح، المفضلة، التجاهل) وتاريخ الامتحان. ستبقى المواد والمحاضرات كما هي.')){ state = {}; examDate = ""; totalStudyDays = 0; try { await userDocRef.update({ state: {}, examDate: "", totalStudyDays: 0 }); isSorted = false; const sortBtn = document.getElementById('sortBtn'); if (sortBtn) { sortBtn.textContent = "فرز حسب الأهمية"; sortBtn.classList.remove('warn'); } init(); if(manageModalBack) manageModalBack.style.display = 'none'; alert("تم تفريغ بيانات التقدم."); } catch (e) { console.error("Error resetting progress:", e); alert("حدث خطأ أثناء تفريغ البيانات."); } } }
+
+// --- Initialization Function (No Change) ---
+function init(){
+    console.log("%cinit() called.", "color: green; font-weight: bold;");
+    if (!currentUser) { console.warn("Cannot init, user not logged in."); return; }
+    const subjectKeys = Object.keys(appData);
+
+    // FIX: Retrieve open cards BEFORE clearing the UI (render() handles the opening)
+    const openCardIds = [];
+    if (cardsEl) {
+        cardsEl.querySelectorAll('.card-content').forEach(contentEl => {
+            if (contentEl.style.display === 'grid') {
+                openCardIds.push(contentEl.id);
+            }
+        });
+    }
+
+    if (subjectKeys.length === 0) {
+        render(null, null);
+        subjectSelector.innerHTML = '<option>لا توجد مواد</option>';
+    } else {
+        if (!activeSubjectName || !appData[activeSubjectName]) {
+            activeSubjectName = subjectKeys[0];
+        }
+        subjectSelector.innerHTML = '';
+        subjectKeys.forEach(subName => {
+            const opt=document.createElement('option');opt.value=subName;opt.textContent=subName;if(subName===activeSubjectName)opt.selected=true; subjectSelector.appendChild(opt);
+        });
+
+        // Pass openCardIds to render function so it knows what to open
+        render(activeSubjectName, appData[activeSubjectName], searchInput ? searchInput.value : "", openCardIds);
+    }
+    calculateAndDisplayDays();
+    updateDynamicPlan();
+    console.log("%cinit() finished.", "color: green; font-weight: bold;");
+}
+
+// FIX: Modified render signature to accept openCardIds
 function render(subName, subData, searchTerm = "", openCardIds = []) {
     console.log(`%cRendering list...`, "color: orange;");
     const globalStats = computeGlobal(subName, subData);
@@ -282,6 +654,7 @@ function render(subName, subData, searchTerm = "", openCardIds = []) {
     }
     const chapters = {};
     const chW = subData.chapters || {};
+    // ... (Chapter data processing remains the same) ...
     Object.entries(subData.doctors).forEach(([dr, ls]) => {
         if (!Array.isArray(ls)) return;
         ls.forEach(l => {
@@ -406,6 +779,7 @@ function render(subName, subData, searchTerm = "", openCardIds = []) {
             });
         }
     });
+    // ... (rest of render function remains the same) ...
     if (firstMatchElement) {
         setTimeout(() => {
             const elementToScroll = cardsEl.querySelector(`.row[data-key="${firstMatchElement.key}"]`);
@@ -419,21 +793,18 @@ function render(subName, subData, searchTerm = "", openCardIds = []) {
 
 /*
 =============================================================================
-=== ✅ updateEntry Function (Final Logic) - Minimizing UX disruption ===
+=== ✅ updateEntry Function (Final Simplified Logic) ===
 =============================================================================
 */
 async function updateEntry(subName, lec, rowEl, action){
     const k = `${subName}||${lec.chapter}||${lec.title}`;
     const rec = state[k] || {snoozed:!1, starred: !1, videoDuration: null};
     let shouldSave = true;
-    let requiresRecalculation = false; // Flag to determine if render/updatePlan is needed
 
     // --- 1. Perform Action & Update State Object ---
     if(action === 'video'){
         const isChecking = rowEl.querySelector('[data-action=video]').checked;
-        const wasVideoChecked = rec.video; // Capture old state
 
-        // 1.1 Handle Prompt (Only if checking and duration is missing)
         if (isChecking && (rec.videoDuration === null || rec.videoDuration === undefined)) {
             const durationInput = prompt(`كم ساعة استغرق فيديو "${lec.title}"؟`, "");
             if (durationInput !== null) {
@@ -453,21 +824,12 @@ async function updateEntry(subName, lec, rowEl, action){
         } else {
              rec.video = isChecking;
         }
-
-        // 1.2 Determine Recalculation Need
-        // Recalculation is needed if: NOTES IS CHECKED AND VIDEO STATE CHANGED (either T->F or F->T)
-        if (shouldSave && rec.notes && (rec.video !== wasVideoChecked)) {
-            requiresRecalculation = true;
-        }
-
     }
     else if(action === 'notes'){
         rec.notes = rowEl.querySelector('[data-action=notes]').checked;
-        requiresRecalculation = true; // Always true for notes/completion change
     }
     else if(action === 'snooze'){
         rec.snoozed = !rec.snoozed;
-        requiresRecalculation = true; // Always true for snooze change
     }
     else if(action === 'star'){
         rec.starred = !rec.starred;
@@ -476,18 +838,16 @@ async function updateEntry(subName, lec, rowEl, action){
             starBtn.classList.toggle('active', rec.starred);
             starBtn.textContent = rec.starred ? '⭐' : '☆';
         }
-        // No recalculation needed, but we still need to save.
     }
 
-    // --- 2. Save Block ---
+    // --- 2. Save Block & Re-initialize ---
     if (shouldSave) {
         state[k] = rec;
         await saveProgress();
 
-        // --- 3. Recalculate and Re-render (The Final Logic) ---
-        if (requiresRecalculation || action === 'star') { // Recalculate if needed OR if starring (star doesn't use the flags)
-
-            // 3.1 Preserve Open State
+        // Re-initialize UI and calculations ONLY if it affects the plan (not just starring)
+        if (action !== 'star') {
+            // FIX: Retrieve open cards BEFORE calling init() inside updateEntry
             const openCardIds = [];
             cardsEl.querySelectorAll('.card-content').forEach(contentEl => {
                 if (contentEl.style.display === 'grid') {
@@ -495,18 +855,17 @@ async function updateEntry(subName, lec, rowEl, action){
                 }
             });
 
-            // 3.2 Recalculate & Re-render
-            render(subName, appData[subName], searchInput ? searchInput.value : "", openCardIds);
-            updateDynamicPlan(); // Update main planner boxes
+            init(); // Re-render everything based on the newly saved state
 
-            // 3.3 Reapply colors (since render() wipes and redraws the rows, this is optional but clean)
-            if(action !== 'star') {
-                rowEl.classList.remove('done','partial','snoozed');
-                if(isLectureComplete(rec)) rowEl.classList.add('done');
-                else if(rec.video || rec.notes) rowEl.classList.add('partial');
-                if(rec.snoozed) rowEl.classList.add('snoozed');
-            }
-
+            // Restore open cards after init finishes rendering
+             setTimeout(() => {
+                openCardIds.forEach(cardId => {
+                    const contentEl = document.getElementById(cardId);
+                    if (contentEl) {
+                        contentEl.style.display = 'grid';
+                    }
+                });
+             }, 0);
         }
     }
 }
@@ -534,53 +893,16 @@ async function signInWithGoogle() { console.log("Attempting Google Sign-In...");
 async function signOutUser() { console.log("Signing out..."); try { await auth.signOut(); } catch (e) { console.error("Sign-out error:", e); alert("خطأ الخروج: " + e.message); } }
 
 // --- Reset Function (No Change) ---
-async function resetAllData() { /* ... */ } // Same as before
-
-// --- Initialization Function (FIXED to pass open cards) ---
-function init(){
-    console.log("%cinit() called.", "color: green; font-weight: bold;");
-    if (!currentUser) { console.warn("Cannot init, user not logged in."); return; }
-    const subjectKeys = Object.keys(appData);
-
-    // FIX: Retrieve open cards BEFORE clearing the UI (render() handles the opening)
-    const openCardIds = [];
-    if (cardsEl) {
-        cardsEl.querySelectorAll('.card-content').forEach(contentEl => {
-            if (contentEl.style.display === 'grid') {
-                openCardIds.push(contentEl.id);
-            }
-        });
-    }
-
-    if (subjectKeys.length === 0) {
-        render(null, null, "", openCardIds); // Pass openCardIds
-        subjectSelector.innerHTML = '<option>لا توجد مواد</option>';
-    } else {
-        if (!activeSubjectName || !appData[activeSubjectName]) {
-            activeSubjectName = subjectKeys[0];
-        }
-        subjectSelector.innerHTML = '';
-        subjectKeys.forEach(subName => {
-            const opt=document.createElement('option');opt.value=subName;opt.textContent=subName;if(subName===activeSubjectName)opt.selected=true; subjectSelector.appendChild(opt);
-        });
-
-        // Pass openCardIds to render function
-        render(activeSubjectName, appData[activeSubjectName], searchInput ? searchInput.value : "", openCardIds);
-    }
-    calculateAndDisplayDays();
-    updateDynamicPlan();
-    console.log("%cinit() finished.", "color: green; font-weight: bold;");
-}
-
+async function resetAllData() { if (!currentUser || !userDocRef) return; if(confirm('متأكد؟ سيتم حذف كل بيانات التقدم (الصح، المفضلة، التجاهل) وتاريخ الامتحان. ستبقى المواد والمحاضرات كما هي.')){ state = {}; examDate = ""; totalStudyDays = 0; try { await userDocRef.update({ state: {}, examDate: "", totalStudyDays: 0 }); isSorted = false; const sortBtn = document.getElementById('sortBtn'); if (sortBtn) { sortBtn.textContent = "فرز حسب الأهمية"; sortBtn.classList.remove('warn'); } init(); if(manageModalBack) manageModalBack.style.display = 'none'; alert("تم تفريغ بيانات التقدم."); } catch (e) { console.error("Error resetting progress:", e); alert("حدث خطأ أثناء تفريغ البيانات."); } } }
 
 // --- Clock Function (No Change) ---
-function updateClock() { /* ... */ } // Same as before
-function startClock() { /* ... */ } // Same as before
+function updateClock() { try { const now = new Date(); const timeString = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }); const dateString = now.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); const clockEl = document.getElementById('liveClock'); const dateEl = document.getElementById('liveDate'); if(clockEl) clockEl.textContent = timeString; if(dateEl) dateEl.textContent = dateString; } catch (e) { console.error("Error updating clock:", e); } }
+function startClock() { updateClock(); setInterval(updateClock, 10000); }
 
-// --- Event Listeners Setup (No Change) ---
+// --- Event Listeners Setup (FIXED) ---
 document.addEventListener('DOMContentLoaded', () => {
-    // ... (All DOM element fetching and listener setup) ...
     console.log("DOM loaded. Fetching elements.");
+    // Fetch elements
     mainAppContent = document.getElementById('mainAppContent'); userSection = document.getElementById('userSection'); userImg = document.getElementById('userImg'); userName = document.getElementById('userName');
     loginBtn = document.getElementById('loginBtn'); logoutBtn = document.getElementById('logoutBtn'); cardsEl = document.getElementById('cards'); subjectSelector = document.getElementById('subjectSelector');
     daysRemainingEl = document.getElementById('daysRemaining'); daysRemainingBox = document.getElementById('daysRemainingBox'); datePickerInput = document.getElementById('datePickerInput');
@@ -597,8 +919,12 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log("Elements fetched. Attaching base listeners.");
     startClock();
 
+    // === FIX FOR LOGIN/LOGOUT BUTTONS ===
     if (loginBtn) { loginBtn.addEventListener('click', signInWithGoogle); console.log("%cLogin listener attached.", "color: green;"); } else { console.error("Login button !found"); }
     if (logoutBtn) logoutBtn.addEventListener('click', signOutUser);
+    // ===================================
+
+    // --- Attach other base listeners ---
     if (addSubjectBtn) addSubjectBtn.addEventListener('click', openAddSubjectModal);
     const saveSubjBtn = document.getElementById('saveNewSubjectBtn'); if (saveSubjBtn) saveSubjBtn.addEventListener('click', handleSaveNewSubject);
     const cancelSubjBtn = document.getElementById('cancelAddSubject'); if (cancelSubjBtn) cancelSubjBtn.addEventListener('click', closeAddSubjectModal);
@@ -621,14 +947,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const chapterHours = subData.chapterHours || {};
         let totalFromChapters = 0;
         let allChaptersHaveHours = allChapters.size > 0;
-        for (const chName of allChapters) { const hours = chapterHours[chName] || 0; if (hours <= 0) { allChaptersHaveHours = false; } totalFromChapters += hours; }
+        for (const chName of allChapters) {
+            const hours = chapterHours[chName] || 0;
+            if (hours <= 0) { allChaptersHaveHours = false; }
+            totalFromChapters += hours;
+        }
         let message;
         let defaultVal = subData?.totalHours || 0;
-        if (allChaptersHaveHours) { message = `اكتمل إدخال ساعات كل الفصول!\nالمجموع هو: ${totalFromChapters.toFixed(1)} ساعة.\n\nهل تريد اعتماد هذا الرقم كـ "إجمالي الساعات"؟\n(للتعديل اليدوي، أدخل رقماً مختلفاً).`; defaultVal = totalFromChapters.toFixed(1); } else { message = `أدخل "إجمالي الساعات" يدوياً للمادة:\n\n(المجموع لن يتغير تلقائياً إلا بعد إدخال ساعات "لكل" الفصول).`; }
+        if (allChaptersHaveHours) {
+            message = `اكتمل إدخال ساعات كل الفصول!\nالمجموع هو: ${totalFromChapters.toFixed(1)} ساعة.\n\nهل تريد اعتماد هذا الرقم كـ "إجمالي الساعات"؟\n(للتعديل اليدوي، أدخل رقماً مختلفاً).`;
+            defaultVal = totalFromChapters.toFixed(1);
+        } else {
+            message = `أدخل "إجمالي الساعات" يدوياً للمادة:\n\n(المجموع لن يتغير تلقائياً إلا بعد إدخال ساعات "لكل" الفصول).`;
+        }
         const input = prompt(message, defaultVal);
         if (input === null) return;
         const newTotal = parseFloat(input);
-        if (newTotal !== null && !isNaN(newTotal) && newTotal >= 0) { appData[subN].totalHours = newTotal; saveAppData(); init(); }
+        if (newTotal !== null && !isNaN(newTotal) && newTotal >= 0) {
+            appData[subN].totalHours = newTotal;
+            saveAppData();
+            init();
+        }
     });
     if (subjectSelector) subjectSelector.addEventListener('change', (e) => { if(!currentUser) return; const newS=e.target.value; activeSubjectName=newS; saveActiveSubject(); render(newS, appData[newS], searchInput ? searchInput.value : ""); updateDynamicPlan(); });
     const showAboutBtn = document.getElementById('showAboutBtn'); const closeAboutBtn = document.getElementById('closeAboutModal'); if (showAboutBtn && aboutModal && closeAboutBtn) { showAboutBtn.addEventListener('click', () => aboutModal.style.display = 'flex'); closeAboutBtn.addEventListener('click', () => aboutModal.style.display = 'none'); aboutModal.addEventListener('click', (e) => { if(e.target === aboutModal) aboutModal.style.display='none'; }); }
@@ -663,6 +1002,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 }); // End of DOMContentLoaded
+
 </script>
 </body>
 </html>
+
+
