@@ -278,7 +278,7 @@ function getDefaultData() {
 async function loadDataFromFirestore() { if (!userDocRef) return; console.log("Ld F:", userId); try { const dS = await userDocRef.get(); if (dS.exists) { const d = dS.data(); appData = d.appData || getDefaultData(); state = d.state || {}; const sK = Object.keys(appData); activeSubjectName = (d.activeSubjectName && appData[d.activeSubjectName]) ? d.activeSubjectName : (sK.length > 0 ? sK[0] : null); examDate = d.examDate || ""; totalStudyDays = d.totalStudyDays || 0; console.log("Ld ok."); } else { console.log("No data, default..."); appData = getDefaultData(); state = {}; activeSubjectName = Object.keys(appData)[0]; examDate = ""; totalStudyDays = 0; await saveAllDataToFirestore(); console.log("Default saved."); } } catch (e) { console.error("Err Ld:", e); appData = getDefaultData(); state = {}; activeSubjectName = Object.keys(appData)[0]; } }
 async function saveAllDataToFirestore() { if (!userDocRef) return; console.log("Sv All..."); try { await userDocRef.set({ appData, state, activeSubjectName, examDate, totalStudyDays }, { merge: true }); console.log("All svd."); } catch (e) { console.error("Err sv all:", e); } }
 async function saveAppData() { if (!userDocRef) return; try { await userDocRef.update({ appData }); console.log("AppD svd."); } catch (e) { console.error("Err sv AppD:", e); } }
-async function saveProgress() { if (!userDocRef) return; try { await userDocRef.update({ state }); console.log("Prog svd."); } catch (e) { console.error("Err sv Prog:", e); } } // Added log
+async function saveProgress() { if (!userDocRef) return; try { await userDocRef.update({ state }); } catch (e) { console.error("Err sv Prog:", e); } }
 async function saveActiveSubject() { if (!userDocRef) return; try { await userDocRef.update({ activeSubjectName }); console.log("ActSubj svd."); } catch (e) { console.error("Err sv ActSubj:", e); } }
 async function saveExamDateAndDays(newD, newTD) { if (!userDocRef) return; examDate = newD; totalStudyDays = newTD; try { await userDocRef.update({ examDate, totalStudyDays }); console.log("ExDate svd."); } catch (e) { console.error("Err sv ExDate:", e); } }
 
@@ -305,7 +305,8 @@ function computeGlobal(subName, subData){
                 t.sl++;
                 t.sw += (l.weight || 0);
             } else {
-                if(isLectureComplete(r)){ // Check notes completion
+                // Hour calculation depends on completion (notes check) AND video checkbox state
+                if(isLectureComplete(r)){ // Check if notes are done
                     t.dl++;
                     t.dw += (l.weight || 0);
                     // Add hours ONLY if lecture is complete AND video is checked AND duration exists
@@ -322,7 +323,6 @@ function computeGlobal(subName, subData){
     const p = al > 0 ? (t.dl / al) * 100 : 0;
     const bp = aw > 0 ? (t.dw / aw) * 100 : 0;
 
-    // console.log("Computed Global:", { ...t, doneHours: t.dh }); // DEBUG LOG
     return {
         ...t,
         activeLectures: al,
@@ -349,8 +349,8 @@ function renderGlobalHeader(subName, subData, computedGlobal){
     try{document.getElementById('globalKpis').innerHTML=`<span class=kpi>الكمية:${g.pct}%</span><span class="kpi status-warn" style="color:var(--warn)">البلوبرنت:${g.blueprintPct}%</span><span class=kpi>الباقي:${g.remainingLectures}/${g.activeLectures}</span><span class=kpi>المتجاهل:${g.snoozedLectures}</span>`}catch(e){/*ignore*/}
 }
 function render(subName, subData, searchTerm = "") {
-    const globalStats = computeGlobal(subName, subData); // Compute once
-    renderGlobalHeader(subName, subData, globalStats); // Pass computed stats
+    const globalStats = computeGlobal(subName, subData);
+    renderGlobalHeader(subName, subData, globalStats);
 
     const openCardIds = [];
     if (cardsEl) {
@@ -380,7 +380,7 @@ function render(subName, subData, searchTerm = "") {
                         totalWeight: chW[cn] || 0,
                         lectureCount: 0,
                         lecturesRemaining: 0,
-                        hoursDone: 0
+                        hoursDone: 0 // Reset hoursDone for each chapter calculation
                     };
                 }
                 chapters[cn].lectures.push({ ...l, doctor: dr });
@@ -388,10 +388,10 @@ function render(subName, subData, searchTerm = "") {
                 const rec = state[k] || { snoozed: !1 };
                 if (!rec.snoozed) {
                     chapters[cn].lectureCount++;
-                    if (!isLectureComplete(rec)) { // Depends only on notes
+                    if (!isLectureComplete(rec)) {
                         chapters[cn].lecturesRemaining++;
                     }
-                    // Add hoursDone based on completion(notes) AND video check AND duration existence
+                    // Add hoursDone based on completion AND video check AND duration existence
                     if (isLectureComplete(rec) && rec.video && rec.videoDuration) {
                         chapters[cn].hoursDone += rec.videoDuration;
                     }
@@ -406,7 +406,7 @@ function render(subName, subData, searchTerm = "") {
         stats: {
             count: d.lectureCount,
             remaining: d.lecturesRemaining,
-            hoursDone: d.hoursDone
+            hoursDone: d.hoursDone // Pass calculated hoursDone
         }
     }));
     if (isSorted) { chA.sort((a, b) => b.totalWeight - a.totalWeight); }
@@ -446,6 +446,7 @@ function render(subName, subData, searchTerm = "") {
         if (hasVisibleLectures) {
             const chapterBlueprintPct = chapterActiveWeight > 0 ? Math.round((chapterCompletedWeight / chapterActiveWeight) * 100) : 0;
             const chapterHoursTotal = subData.chapterHours?.[ch.name] || 0;
+            // Use the calculated ch.stats.hoursDone
             const chapterHoursRemaining = Math.max(0, chapterHoursTotal - ch.stats.hoursDone);
             const card = document.createElement('section');
             card.className = "card";
@@ -501,20 +502,19 @@ function render(subName, subData, searchTerm = "") {
 
 /*
 =============================================================================
-=== ✅ FINAL REVISED LOGIC: updateEntry Function ===
-1.  Video Action: Ask for duration if missing. Set `requiresPlanUpdate = true` ONLY IF notes are currently checked (`isLectureComplete(rec)` is true).
-2.  Notes Action: Always set `requiresPlanUpdate = true`.
-3.  Snooze Action: Always set `requiresPlanUpdate = true`.
-4.  Star Action: No plan update.
+=== ✅ REVISED LOGIC: updateEntry Function ===
+1.  Video Action: Sets requiresPlanUpdate = true ONLY IF `isLectureComplete(rec)` is true AFTER the video state change.
+2.  Notes Action: Sets requiresPlanUpdate = true ALWAYS.
 =============================================================================
 */
 async function updateEntry(subName, lec, rowEl, action){
-    const k = `${subName}||${lec.chapter}||${lec.title}`;
-    const rec = state[k] || {snoozed:!1, starred: !1, videoDuration: null};
-    let requiresPlanUpdate = false; // Assume no update needed initially
+    const k=`${subName}||${lec.chapter}||${lec.title}`;
+    const rec=state[k]||{snoozed:!1, starred: !1, videoDuration: null};
+    let requiresPlanUpdate = false;
+    // No need for wasCompleteBeforeChange with this logic
 
-    // --- 1. Perform Action & Update State ---
-    if(action === 'video'){
+    // --- 1. Logic Block ---
+    if(action==='video'){
         const isChecking = rowEl.querySelector('[data-action=video]').checked;
         rec.video = isChecking; // Update video state first
 
@@ -525,42 +525,44 @@ async function updateEntry(subName, lec, rowEl, action){
                 const duration = parseFloat(durationInput);
                 if (!isNaN(duration) && duration > 0) {
                     rec.videoDuration = duration;
-                    // Check if lecture is complete NOW (based on notes)
-                    if (isLectureComplete(rec)) { // isLectureComplete depends only on rec.notes
-                         requiresPlanUpdate = true; // Duration added AND lecture is complete
+                    // Check if lecture is complete *after* adding duration
+                    if (isLectureComplete(rec)) { // Depends only on rec.notes
+                         requiresPlanUpdate = true;
                     }
-                } else { // Invalid or empty input (treat empty as invalid)
+                } else if (durationInput !== "") { // Invalid input
                     alert("أدخل رقم صحيح (مثل 1.5).");
                     rowEl.querySelector('[data-action=video]').checked = false; // Revert UI
-                    rec.video = false; // Revert state change
-                    requiresPlanUpdate = false; // Ensure no update happens
+                    rec.video = false; // Revert state
+                } else { // Empty input treated as invalid
+                     alert("أدخل رقم صحيح (مثل 1.5).");
+                    rowEl.querySelector('[data-action=video]').checked = false; // Revert UI
+                    rec.video = false; // Revert state
                 }
             } else { // User cancelled prompt
                 rowEl.querySelector('[data-action=video]').checked = false; // Revert UI
-                rec.video = false; // Revert state change
-                requiresPlanUpdate = false; // Ensure no update happens
+                rec.video = false; // Revert state
             }
         } else {
-             // Duration already exists. Check if lecture is complete NOW (based on notes)
-             if (isLectureComplete(rec)) { // isLectureComplete depends only on rec.notes
-                 requiresPlanUpdate = true; // Toggle video for a complete lecture affects hours
+             // Duration already exists. Check if lecture is complete *now*
+             if (isLectureComplete(rec)) { // Depends only on rec.notes
+                 requiresPlanUpdate = true; // Trigger update if notes are checked
              }
         }
     }
-    else if(action === 'notes'){
+    else if(action==='notes'){
         // Update notes state first
-        rec.notes = rowEl.querySelector('[data-action=notes]').checked;
-        // Always trigger update when notes change, as this defines completion and affects hour calculation
-        requiresPlanUpdate = true;
+        rec.notes=rowEl.querySelector('[data-action=notes]').checked;
+        // Always trigger update when notes change, as this defines completion
+        requiresPlanUpdate=true;
     }
-    else if(action === 'snooze'){
-        rec.snoozed = !rec.snoozed;
+    else if(action==='snooze'){
+        rec.snoozed=!rec.snoozed;
         // Always trigger update when snooze changes
-        requiresPlanUpdate = true;
+        requiresPlanUpdate=true;
     }
-    else if(action === 'star'){
-        rec.starred = !rec.starred;
-        const starBtn = rowEl.querySelector('.star-btn');
+    else if(action==='star'){
+        rec.starred=!rec.starred;
+        const starBtn=rowEl.querySelector('.star-btn');
         if(starBtn) {
             starBtn.classList.toggle('active', rec.starred);
             starBtn.textContent = rec.starred ? '⭐' : '☆';
@@ -569,32 +571,28 @@ async function updateEntry(subName, lec, rowEl, action){
     }
 
     // --- 2. Save Block ---
-    state[k] = rec;
-    // Save progress after state is updated
+    state[k]=rec;
     await saveProgress();
 
-    // --- 3. UI Update Block (Row Appearance) ---
-    // Update row colors based on the *new* state, except for star action
+    // --- 3. UI Update Block (for non-star actions) ---
+    // Update row colors (done, partial, snoozed) based on the *new* state
     if(action !== 'star') {
         rowEl.classList.remove('done','partial','snoozed');
-        if(isLectureComplete(rec)) rowEl.classList.add('done'); // Depends only on rec.notes
-        else if(rec.video || rec.notes) rowEl.classList.add('partial');
+        // Check completion status *after* potential changes (e.g., notes checked/unchecked)
+        if(isLectureComplete(rec)) rowEl.classList.add('done'); // isLectureComplete depends only on rec.notes
+        else if(rec.video||rec.notes) rowEl.classList.add('partial');
         if(rec.snoozed) rowEl.classList.add('snoozed');
     }
 
-    // --- 4. Plan Update Block (Re-render if necessary) ---
+    // --- 4. Plan Update Block ---
     if(requiresPlanUpdate){
-        console.log("Requires Plan Update triggered by action:", action, " New state:", rec); // Detailed log
-        const actSub = activeSubjectName;
-        // Re-render the whole list to update chapter stats AND global stats correctly
+        const actSub=activeSubjectName;
+        // Re-render the whole list to update chapter stats correctly
         render(actSub, appData[actSub], searchInput ? searchInput.value : "");
         // Update the global planner boxes
         updateDynamicPlan();
-    } else {
-         console.log("Requires Plan Update NOT triggered by action:", action, " New state:", rec); // Detailed log
     }
 }
-
 
 
 // --- Planning Functions (No Change) ---
