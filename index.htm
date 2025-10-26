@@ -10,7 +10,7 @@
 <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
 
 <style>
-  /* --- Base Styles (Stable Version) --- */
+  /* --- Base Styles (User's Provided - UNCHANGED) --- */
   :root{
     --bg:#0f172a; --card:#111827; --muted:#1f2937;
     --accent:#3b82f6; --accent2:#22c55e; --warn:#f59e0b;
@@ -259,6 +259,7 @@ function renderGlobalHeader(subName, subData, computedGlobal){
     totalHoursEl.textContent=subData?.totalHours?`${subData.totalHours}`:"-";
     try{document.getElementById('globalKpis').innerHTML=`<span class=kpi>الكمية:${g.pct}%</span><span class="kpi status-warn" style="color:var(--warn)">البلوبرنت:${g.blueprintPct}%</span><span class=kpi>الباقي:${g.remainingLectures}/${g.activeLectures}</span><span class=kpi>المتجاهل:${g.snoozedLectures}</span>`}catch(e){/*ignore*/}
 }
+// Render function accepts openCardIds
 function render(subName, subData, searchTerm = "", openCardIds = []) {
     const globalStats = computeGlobal(subName, subData);
     renderGlobalHeader(subName, subData, globalStats);
@@ -302,11 +303,7 @@ function render(subName, subData, searchTerm = "", openCardIds = []) {
 }
 
 
-/*
-=============================================================================
-=== ✅ updateEntry Function (Final Logic) - Minimizing UX disruption ===
-=============================================================================
-*/
+// --- updateEntry Function (Stable logic, prompt only on first check) ---
 async function updateEntry(subName, lec, rowEl, action){
     const k = `${subName}||${lec.chapter}||${lec.title}`;
     const rec = state[k] || {snoozed:!1, starred: !1, videoDuration: null};
@@ -318,27 +315,26 @@ async function updateEntry(subName, lec, rowEl, action){
         const isChecking = rowEl.querySelector('[data-action=video]').checked;
         const wasVideoChecked = rec.video; // Capture old state
 
-        if (isChecking) { // ALWAYS prompt if checking
-            const currentDuration = (rec.videoDuration !== null && rec.videoDuration !== undefined) ? rec.videoDuration : ""; // Suggest current value
-            const durationInput = prompt(`كم ساعة استغرق فيديو "${lec.title}"؟ (أدخل رقم)`, currentDuration);
-
-            if (durationInput !== null) { // Not cancelled
+        // Prompt logic (Only prompt on first check OR if duration is missing)
+        if (isChecking && (rec.videoDuration === null || rec.videoDuration === undefined)) {
+            const durationInput = prompt(`كم ساعة استغرق فيديو "${lec.title}"؟`, "");
+            if (durationInput !== null) {
                 const duration = parseFloat(durationInput);
                 if (!isNaN(duration) && duration >= 0) { // Allow 0 hours
                     rec.videoDuration = duration;
-                    rec.video = true; // Set video to true
-                } else { // Invalid input
+                    rec.video = true;
+                } else {
                     alert("الرجاء إدخال رقم صحيح للساعات (مثل 1.5 أو 0).");
-                    rowEl.querySelector('[data-action=video]').checked = rec.video; // Revert UI
+                    rowEl.querySelector('[data-action=video]').checked = false; // Revert UI
                     shouldSave = false;
                 }
-            } else { // User cancelled prompt
-                rowEl.querySelector('[data-action=video]').checked = rec.video; // Revert UI
+            } else {
+                rowEl.querySelector('[data-action=video]').checked = false; // Revert UI on cancel
                 shouldSave = false;
             }
         } else {
-             // User is UNCHECKING the video box
-             rec.video = false;
+             // Duration exists or unchecking. Just update the video state.
+             rec.video = isChecking;
         }
 
         // Determine Recalculation Need AFTER state update attempt
@@ -374,41 +370,22 @@ async function updateEntry(subName, lec, rowEl, action){
 
             // --- 3. Recalculate and Re-render (Only if needed) ---
             if (requiresRecalculation) {
-
-                // 3.1 Preserve Open State
                 const openCardIds = [];
-                if (cardsEl) { // Check cardsEl exists
-                    cardsEl.querySelectorAll('.card-content').forEach(contentEl => {
-                        if (contentEl.style.display === 'grid') {
-                            openCardIds.push(contentEl.id);
-                        }
-                    });
-                }
-
-                // 3.2 Recalculate & Re-render (Pass open IDs)
+                if (cardsEl) { cardsEl.querySelectorAll('.card-content').forEach(contentEl => { if (contentEl.style.display === 'grid') { openCardIds.push(contentEl.id); } }); }
                 render(subName, appData[subName], searchInput ? searchInput.value : "", openCardIds);
-                updateDynamicPlan(); // Update main planner boxes
-
+                updateDynamicPlan();
             } else if (action !== 'star') {
-                // If no recalculation needed but it wasn't star, just update row colors
-                 rowEl.classList.remove('done','partial','snoozed');
-                 if(isLectureComplete(rec)) rowEl.classList.add('done');
-                 else if(rec.video || rec.notes) rowEl.classList.add('partial');
-                 if(rec.snoozed) rowEl.classList.add('snoozed');
+                 rowEl.classList.remove('done','partial','snoozed'); if(isLectureComplete(rec)) rowEl.classList.add('done'); else if(rec.video || rec.notes) rowEl.classList.add('partial'); if(rec.snoozed) rowEl.classList.add('snoozed');
             }
-             // Star action only updates star UI, no need for full render or color update here
 
         } catch (e) {
             console.error("Save failed:", e);
-            // Consider reverting UI if save fails
             if (action === 'video') rowEl.querySelector('[data-action=video]').checked = !rec.video;
             if (action === 'notes') rowEl.querySelector('[data-action=notes]').checked = !rec.notes;
-            // ... potentially revert other actions too ...
             alert("فشل حفظ التغيير. الرجاء المحاولة مرة أخرى.");
         }
     } else {
-        // If save was prevented (e.g., cancelled prompt), ensure UI matches actual state
-        if (action === 'video') rowEl.querySelector('[data-action=video]').checked = rec.video;
+        if (action === 'video') rowEl.querySelector('[data-action=video]').checked = rec.video; // Ensure UI matches non-saved state
     }
 }
 
@@ -436,7 +413,6 @@ function updateDynamicPlan() {
     if(planStatusInfo) { if(totalDays<=0||daysRem===null||daysRem<0) { planStatusInfo.title = "حدد تاريخ امتحان صحيح."; } else { planStatusInfo.title = "يقارن نسبة إنجاز البلوبرنت (الأهمية) بنسبة الوقت المنقضي. | متأخر 😥: إنجازك أقل بـ 10% من الوقت. | على المسار 👍: إنجازك في حدود 10% من الوقت. | متقدم 😎: إنجازك يتفوق بـ 10% على الوقت."; } }
 }
 
-
 // --- NEW What-If Function ---
 function handleWhatIfClick() {
     if (!currentUser || !remainingHoursEl) return;
@@ -451,6 +427,7 @@ function handleWhatIfClick() {
         if (daysInput !== null) { const targetDays = parseInt(daysInput); if (!isNaN(targetDays) && targetDays > 0) { const hoursPerDayNeeded = remainingHours / targetDays; whatIfValue.textContent = `${hoursPerDayNeeded.toFixed(1)} ساعة/يوم`; whatIfLabel.textContent = `ساعات مطلوبة (اضغط لحساب الأيام)`; whatIfMode = 'calculateDays'; } else { alert("الرجاء إدخال رقم صحيح أكبر من صفر للأيام."); } }
     }
 }
+
 
 // --- Modal Functions (No Change) ---
 function openAddSubjectModal() { if (!currentUser) return; document.getElementById('newSubjectNameInput').value = ''; addSubjectModal.style.display = 'flex'; }
@@ -494,7 +471,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log("DOM loaded. Fetching essential elements first.");
     loginBtn = document.getElementById('loginBtn'); logoutBtn = document.getElementById('logoutBtn');
     if (loginBtn) { loginBtn.addEventListener('click', signInWithGoogle); console.log("%cLogin listener attached.", "color: green;"); } else { console.error("CRITICAL ERROR: Login button ('loginBtn') NOT FOUND!"); }
-    if (logoutBtn) { logoutBtn.addEventListener('click', signOutUser); console.log("%cLogout listener attached.", "color: green;"); } else { console.warn("Logout button ('logoutBtn') not initially found."); }
+    if (logoutBtn) { logoutBtn.addEventListener('click', signOutUser); console.log("%cLogout listener attached.", "color: green;"); } else { console.warn("Logout button ('logoutBtn') not initially found.");}
 
     // --- Fetch other elements ---
     mainAppContent = document.getElementById('mainAppContent'); userSection = document.getElementById('userSection'); userImg = document.getElementById('userImg'); userName = document.getElementById('userName'); cardsEl = document.getElementById('cards'); subjectSelector = document.getElementById('subjectSelector');
@@ -525,7 +502,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const sortBtn = document.getElementById('sortBtn'); if (sortBtn) sortBtn.addEventListener('click', ()=>{ isSorted = !isSorted; const btn = sortBtn; if (isSorted) { btn.textContent = "إلغاء الفرز"; btn.classList.add('warn'); } else { btn.textContent = "فرز حسب الأهمية"; btn.classList.remove('warn'); } if(currentUser) init(); });
     if (daysRemainingBox) daysRemainingBox.addEventListener('click', () => { if(!currentUser) return; try{ datePickerInput.showPicker(); } catch(e){console.warn("Picker err",e)} });
     if (datePickerInput) datePickerInput.addEventListener('change', (e) => { if(!currentUser) return; const newD = e.target.value; if(newD){ const tDays=getDaysRemaining(newD); saveExamDateAndDays(newD, tDays); calculateAndDisplayDays(); updateDynamicPlan(); } });
-    if (totalHoursBox) totalHoursBox.addEventListener('click', () => { /* ... Total Hours Logic ... */ });
+    if (totalHoursBox) totalHoursBox.addEventListener('click', () => {
+        if(!currentUser) return; const subN=activeSubjectName; if(!subN)return; const subData = appData[subN]; if (!subData) return;
+        const allChapters = new Set(); Object.values(subData.doctors || {}).forEach(ls => { if(Array.isArray(ls)) { ls.forEach(l => allChapters.add(l.chapter || "غير مصنف")); } });
+        const chapterHours = subData.chapterHours || {}; let totalFromChapters = 0; let allChaptersHaveHours = allChapters.size > 0;
+        for (const chName of allChapters) { const hours = chapterHours[chName] || 0; if (hours <= 0) { allChaptersHaveHours = false; } totalFromChapters += hours; }
+        let message; let defaultVal = subData?.totalHours || 0;
+        if (allChaptersHaveHours) { message = `اكتمل إدخال ساعات كل الفصول!\nالمجموع هو: ${totalFromChapters.toFixed(1)} ساعة.\n\nهل تريد اعتماد هذا الرقم كـ "إجمالي الساعات"؟\n(للتعديل اليدوي، أدخل رقماً مختلفاً).`; defaultVal = totalFromChapters.toFixed(1); } else { message = `أدخل "إجمالي الساعات" يدوياً للمادة:\n\n(المجموع لن يتغير تلقائياً إلا بعد إدخال ساعات "لكل" الفصول).`; }
+        const input = prompt(message, defaultVal); if (input === null) return; const newTotal = parseFloat(input);
+        if (newTotal !== null && !isNaN(newTotal) && newTotal >= 0) { appData[subN].totalHours = newTotal; saveAppData(); init(); }
+    });
     if (subjectSelector) subjectSelector.addEventListener('change', (e) => { if(!currentUser) return; const newS=e.target.value; activeSubjectName=newS; saveActiveSubject(); init(); }); // Call init() on subject change
     const showAboutBtn = document.getElementById('showAboutBtn'); const closeAboutBtn = document.getElementById('closeAboutModal'); if (showAboutBtn && aboutModal && closeAboutBtn) { showAboutBtn.addEventListener('click', () => aboutModal.style.display = 'flex'); closeAboutBtn.addEventListener('click', () => aboutModal.style.display = 'none'); aboutModal.addEventListener('click', (e) => { if(e.target === aboutModal) aboutModal.style.display='none'; }); }
     if (searchInput) { searchInput.addEventListener('input', (e) => { if (currentUser && activeSubjectName) { render(activeSubjectName, appData[activeSubjectName], e.target.value); } }); }
