@@ -477,10 +477,185 @@ function openAddSubjectModal() { if (!currentUser) return; document.getElementBy
 function closeAddSubjectModal() { addSubjectModal.style.display = 'none'; }
 function handleSaveNewSubject() { if (!currentUser) return; const nameIn=document.getElementById('newSubjectNameInput');const name=nameIn.value.trim();if(name&&!appData[name]){appData[name]={totalHours:0,chapters:{},doctors:{}, chapterHours:{}}; saveAppData();activeSubjectName=name;saveActiveSubject();init();closeAddSubjectModal()}else if(!name){alert('أدخل اسم المادة.')}else{alert('المادة موجودة.')} }
 async function handleSaveChapterHours(e) { if (!currentUser || !activeSubjectName) return; const input = e.target; const chName = input.dataset.chapterName; const hours = parseFloat(input.value); if (chName && !isNaN(hours) && hours >= 0) { if (!appData[activeSubjectName].chapterHours) { appData[activeSubjectName].chapterHours = {}; } appData[activeSubjectName].chapterHours[chName] = hours; await saveAppData(); render(activeSubjectName, appData[activeSubjectName], searchInput ? searchInput.value : ""); } }
-function openManageModal() { /* ... */ } // Same as before
+function openManageModal() {
+    if (!currentUser || !manageModalBack) return;
+    const subName = activeSubjectName;
+    if (!subName || !appData[subName]) {
+        alert('اختر مادة لإدارتها.');
+        return;
+    }
+    const subData = appData[subName];
+    const modalEl = document.getElementById('manageModalContent');
+    if (!modalEl) return;
+
+    const chapters = subData.chapters || {};
+    const chapterHours = subData.chapterHours || {};
+    const chapterItems = Object.keys(chapters).length > 0
+        ? Object.entries(chapters).map(([name, weight]) => {
+            const hoursVal = (chapterHours[name] ?? '').toString();
+            return `
+                <div class="form-group" data-chapter-row="${name}">
+                    <label>${name}</label>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <input type="number" step="0.1" data-chapter-name="${name}" data-purpose="chapter-weight" value="${weight}" style="max-width:160px;" title="نسبة أهمية الفصل">
+                        <input type="number" step="0.1" data-chapter-name="${name}" value="${hoursVal}" style="max-width:160px;" title="ساعات الفصل">
+                    </div>
+                </div>`;
+        }).join('')
+        : '<p style="color: var(--sub);">لا توجد فصول بعد.</p>';
+
+    const doctorOptions = Object.keys(subData.doctors || {}).map(name => `<option value="${name}">${name}</option>`).join('');
+
+    modalEl.innerHTML = `
+        <h3>إدارة ${subName}</h3>
+        <div class="form-group">
+            <label for="totalHoursInput">إجمالي الساعات:</label>
+            <input type="number" step="0.1" id="totalHoursInput" value="${subData.totalHours || 0}" />
+        </div>
+        <div class="divider"></div>
+        <div>
+            <h4 style="margin:0 0 8px; color: var(--warn);">الفصول</h4>
+            ${chapterItems}
+        </div>
+        <div class="divider"></div>
+        <div class="form-group">
+            <label for="newDoctorName">إضافة دكتور جديد:</label>
+            <div style="display:flex; gap:8px;">
+                <input type="text" id="newDoctorName" placeholder="اسم الدكتور" />
+                <button id="addDoctorBtn">إضافة</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="doctorSelect">الدكتور:</label>
+            <select id="doctorSelect">
+                ${doctorOptions || '<option value="" disabled selected>لا يوجد دكاترة</option>'}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="bulkLectures">إضافة محاضرات (سطر لكل محاضرة):</label>
+            <textarea id="bulkLectures" placeholder="عنوان المحاضرة 1\nعنوان المحاضرة 2" style="min-height:120px;"></textarea>
+            <button id="bulkAddLecturesBtn">إضافة المحاضرات</button>
+        </div>
+        <div class="divider"></div>
+        <div style="text-align:left; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="secondary" id="closeManageModal">إغلاق</button>
+        </div>
+    `;
+
+    const totalHoursInput = document.getElementById('totalHoursInput');
+    if (totalHoursInput) {
+        totalHoursInput.addEventListener('change', (e) => {
+            if (!currentUser) return;
+            const val = parseFloat(e.target.value);
+            if (!isNaN(val) && val >= 0) {
+                subData.totalHours = val;
+                saveAppData();
+                render(subName, subData, searchInput ? searchInput.value : "");
+                updateDynamicPlan();
+            } else {
+                alert('أدخل رقم صحيح لإجمالي الساعات.');
+                e.target.value = subData.totalHours || 0;
+            }
+        });
+    }
+
+    modalEl.querySelectorAll('input[data-purpose="chapter-weight"]').forEach(input => {
+        input.addEventListener('change', (e) => {
+            if (!currentUser) return;
+            const chapterName = e.target.dataset.chapterName;
+            const val = parseFloat(e.target.value);
+            if (!chapterName) return;
+            if (!isNaN(val) && val >= 0) {
+                if (!subData.chapters) subData.chapters = {};
+                subData.chapters[chapterName] = parseFloat(val.toFixed(2));
+                saveAppData();
+                render(subName, subData, searchInput ? searchInput.value : "");
+            } else {
+                alert('أدخل رقم صحيح لنسبة الأهمية.');
+                e.target.value = subData.chapters?.[chapterName] ?? 0;
+            }
+        });
+    });
+
+    modalEl.querySelectorAll('input[data-chapter-name]').forEach(input => {
+        if (input.dataset.purpose === 'chapter-weight') return;
+        input.addEventListener('change', handleSaveChapterHours);
+    });
+
+    const addDoctorBtn = document.getElementById('addDoctorBtn');
+    if (addDoctorBtn) addDoctorBtn.addEventListener('click', handleAddDoctor);
+
+    const bulkAddBtn = document.getElementById('bulkAddLecturesBtn');
+    if (bulkAddBtn) bulkAddBtn.addEventListener('click', handleBulkAddLectures);
+
+    const closeBtn = document.getElementById('closeManageModal');
+    if (closeBtn) closeBtn.addEventListener('click', () => { manageModalBack.style.display = 'none'; });
+
+    manageModalBack.style.display = 'flex';
+    manageModalBack.addEventListener('click', (e) => {
+        if (e.target === manageModalBack) manageModalBack.style.display = 'none';
+    }, { once: true });
+}
 function handleAddDoctor() { if(!currentUser)return; const subName=activeSubjectName;const inp=document.getElementById('newDoctorName');const name=inp.value.trim();if(name&&!appData[subName].doctors[name]){appData[subName].doctors[name]=[];saveAppData();init();openManageModal()}else{alert('الاسم موجود أو فارغ.')} }
 function handleBulkAddLectures() { if(!currentUser)return; const subName=activeSubjectName;const dr=document.getElementById('doctorSelect').value;const txt=document.getElementById('bulkLectures');const tx=txt.value.trim();if(!dr||!tx){alert('اختر دكتور والصق المحاضرات.');return} const newLs=tx.split('\n').map(l=>l.trim()).filter(l=>l).map(t=>({title:t,video:"",chapter:"غير مصنف",weight:0}));if(newLs.length>0){const exLs=appData[subName].doctors[dr] || []; appData[subName].doctors[dr]=exLs.concat(newLs);saveAppData();txt.value='';alert(`تمت إضافة ${newLs.length}.`);init();openManageModal()} }
-function setupRemainingModal() { /* ... */ } // Same as before
+function setupRemainingModal() {
+    if (!currentUser || !remainingModalBack) return;
+    const container = document.getElementById('remainingContainer');
+    const subName = activeSubjectName;
+    if (!container) return;
+    if (!subName || !appData[subName]) {
+        container.innerHTML = '<p style="text-align:center;">لا توجد مادة نشطة.</p>';
+        remainingModalBack.style.display = 'flex';
+        return;
+    }
+
+    const subData = appData[subName];
+    const remainingByChapter = {};
+    Object.entries(subData.doctors || {}).forEach(([doctor, lectures]) => {
+        if (!Array.isArray(lectures)) return;
+        lectures.forEach(lec => {
+            const key = `${subName}||${lec.chapter}||${lec.title}`;
+            const rec = state[key] || { snoozed: !1 };
+            if (rec.snoozed || isLectureComplete(rec)) return;
+            const chapterName = lec.chapter || 'غير مصنف';
+            if (!remainingByChapter[chapterName]) remainingByChapter[chapterName] = [];
+            remainingByChapter[chapterName].push({
+                title: lec.title,
+                doctor,
+                weight: lec.weight || 0
+            });
+        });
+    });
+
+    const chapterEntries = Object.entries(remainingByChapter);
+    if (chapterEntries.length === 0) {
+        container.innerHTML = '<p style="text-align:center;">🎉 لا يوجد شيء متبقي لهذه المادة.</p>';
+    } else {
+        chapterEntries.sort((a, b) => {
+            const totalA = a[1].reduce((sum, lec) => sum + (lec.weight || 0), 0);
+            const totalB = b[1].reduce((sum, lec) => sum + (lec.weight || 0), 0);
+            return totalB - totalA;
+        });
+
+        const html = chapterEntries.map(([chapter, lectures]) => {
+            const totalWeight = lectures.reduce((sum, lec) => sum + (lec.weight || 0), 0).toFixed(1);
+            const items = lectures.map(lec => `<li>(${lec.doctor}) - ${lec.title} <span style="color:var(--warn); font-size:14px;">${lec.weight || 0}%</span></li>`).join('');
+            return `
+                <section class="card" style="padding:16px;">
+                    <h4 style="margin-top:0;">${chapter} <span style="color:var(--warn); font-size:14px;">${totalWeight}%</span></h4>
+                    <ul style="margin:0; padding-right:20px; line-height:1.8;">
+                        ${items}
+                    </ul>
+                </section>`;
+        }).join('');
+        container.innerHTML = html;
+    }
+
+    remainingModalBack.style.display = 'flex';
+    remainingModalBack.addEventListener('click', (e) => {
+        if (e.target === remainingModalBack) remainingModalBack.style.display = 'none';
+    }, { once: true });
+}
 function setupStarredModal() { /* ... */ } // Same as before
 
 // --- Auth Functions (No Change) ---
